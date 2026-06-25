@@ -1,0 +1,49 @@
+#!/bin/bash
+# Launcher for Soda Transcriptions: starts the API (and built UI) then opens your browser.
+# Keeps running until you quit from the Dock (Cmd+Q).
+
+set -e
+export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.local/bin:${PATH}"
+
+ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+RUN_DIR="${ROOT}/server"
+
+if ! command -v poetry >/dev/null 2>&1; then
+	osascript -e 'display alert "Poetry not found" message "Install from https://python-poetry.org and ensure poetry is on your PATH (e.g. Homebrew or the official installer)." as critical' 2>/dev/null || true
+	exit 1
+fi
+
+# macOS grep is BSD: in basic regex, "+" is literal, so OLD pattern required a "+" in the key value.
+if [[ ! -f "${RUN_DIR}/.env" ]] || \
+	! grep -Eq '^[[:space:]]*(export[[:space:]]+)?OPENAI_API_KEY=[[:space:]]*[^[:space:]#]+' \
+	"${RUN_DIR}/.env" 2>/dev/null; then
+	osascript -e 'display alert "Missing API key" message "Put a non-empty OPENAI_API_KEY in server/.env (this is separate from client dev/production)." as critical' 2>/dev/null || true
+	exit 1
+fi
+
+if [[ ! -f "${ROOT}/client/dist/index.html" ]]; then
+	osascript -e 'display alert "UI not built" message "From the repo root run: cd client && npm install && npm run build" as critical' 2>/dev/null || true
+	exit 1
+fi
+
+cd "${RUN_DIR}"
+PORT=8765
+if [[ -f "${RUN_DIR}/.env" ]]; then
+	line="$(grep -E '^[[:space:]]*API_PORT=' "${RUN_DIR}/.env" | tail -1 || true)"
+	if [[ -n "${line}" ]]; then
+		PORT="${line#*=}"
+		PORT="${PORT//$'\r'/}"
+	fi
+fi	
+
+(
+	for _ in $(seq 1 40); do
+		if curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null; then
+			open "http://127.0.0.1:${PORT}/"
+			exit 0
+		fi
+		sleep 0.25
+	done
+) &
+
+exec poetry run uvicorn main:app --host 127.0.0.1 --port "${PORT}"
